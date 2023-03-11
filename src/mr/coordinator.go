@@ -3,40 +3,40 @@ package mr
 import (
 	"fmt"
 	"log"
+	"net"
+	"net/http"
+	"net/rpc"
+	"os"
 	"sync"
 	"time"
 )
-import "net"
-import "os"
-import "net/rpc"
-import "net/http"
 
 type Coordinator struct {
 	// Your definitions here.
-	tasks                    []*Task
-	id2Task                  map[int]*Task
-	completedMapTaskCount    int
-	completedReduceTaskCount int
-	rwMutex                  sync.RWMutex
+	Tasks                    []*Task
+	CompletedMapTaskCount    int
+	CompletedReduceTaskCount int
+	RwMutex                  sync.RWMutex
 
-	mapTaskNum int
+	MapTaskNum int
 }
 
 // Your code here -- RPC handlers for the worker to call.
 
 func (c *Coordinator) AskTask(req *AskTaskReq, resp *AskTaskResp) error {
-	c.rwMutex.RLock()
-	defer c.rwMutex.RUnlock()
-	for _, task := range c.tasks {
+	c.RwMutex.Lock()
+	defer c.RwMutex.Unlock()
+	for _, task := range c.Tasks {
 		if task.TaskStatus == TaskCreated {
 			task.WorkId = req.WorkerId
+			task.TaskStatus = TaskIsAssigned
 			resp.Task = task
 			if task.timer != nil {
 				task.timer.Reset(10 * time.Second)
 			} else {
 				task.timer = time.AfterFunc(10*time.Second, func() {
-					c.rwMutex.RLock()
-					defer c.rwMutex.RUnlock()
+					c.RwMutex.Lock()
+					defer c.RwMutex.Unlock()
 					if task.TaskStatus != TaskIsComplete {
 						task.TaskStatus = TaskCreated
 						task.WorkId = 0
@@ -56,18 +56,18 @@ func (c *Coordinator) IsDone(req *DoneReq, resp *DoneResp) error {
 }
 
 func (c *Coordinator) UpdateTaskStatus(req *UpdateTaskStatusReq, resp *UpdateTaskStatusResp) error {
-	c.rwMutex.Lock()
-	defer c.rwMutex.Unlock()
-	task := c.id2Task[req.TaskId]
+	c.RwMutex.Lock()
+	defer c.RwMutex.Unlock()
+	task := c.Tasks[req.TaskId]
 	if task == nil {
 		return nil
 	}
 	if task.WorkId == req.WorkerId && task.TaskStatus == TaskIsAssigned {
 		task.TaskStatus = req.TaskStatus
 		if task.TaskType == MapType {
-			c.completedMapTaskCount += 1
+			c.CompletedMapTaskCount += 1
 		} else {
-			c.completedReduceTaskCount += 1
+			c.CompletedReduceTaskCount += 1
 		}
 	}
 
@@ -91,17 +91,17 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	c.rwMutex.RLock()
-	c.rwMutex.RUnlock()
-	return c.completedMapTaskCount+c.completedReduceTaskCount == len(c.tasks)
+	c.RwMutex.RLock()
+	defer c.RwMutex.RUnlock()
+	return c.CompletedMapTaskCount+c.CompletedReduceTaskCount == len(c.Tasks)
 }
 
 func (c *Coordinator) CanRun(req CanRunReq, resp *CanRunResp) error {
-	c.rwMutex.RLock()
-	c.rwMutex.RUnlock()
-	task := c.id2Task[req.TaskId]
+	c.RwMutex.RLock()
+	defer c.RwMutex.RUnlock()
+	task := c.Tasks[req.TaskId]
 	if task != nil && task.TaskStatus == TaskIsAssigned && task.WorkId == req.WorkerId {
-		if c.completedMapTaskCount == c.mapTaskNum {
+		if c.CompletedMapTaskCount == c.MapTaskNum {
 			resp.CanRun = true
 		}
 	}
@@ -115,9 +115,9 @@ func (c *Coordinator) CanRun(req CanRunReq, resp *CanRunResp) error {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 	// init tasks
-	c.tasks = make([]*Task, len(files)+nReduce)
+	c.Tasks = make([]*Task, len(files)+nReduce)
 	for i := 0; i < len(files); i++ {
-		c.tasks[i] = &Task{
+		c.Tasks[i] = &Task{
 			TaskId:     i,
 			FileName:   files[i],
 			NReduce:    nReduce,
@@ -127,25 +127,21 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 	for i := 0; i < nReduce; i++ {
 		task := &Task{
-			TaskId:     i,
+			TaskId:     i + len(files),
 			NReduce:    nReduce,
 			TaskType:   ReduceType,
 			TaskStatus: TaskCreated,
 		}
 		filenames := make([]string, len(files))
 		for j := 0; j < len(files); j++ {
-			filenames[i] = fmt.Sprintf("m-%d-%d", j, i)
+			filenames[j] = fmt.Sprintf("mr-%d-%d", j, i)
 		}
 		task.FileNames = filenames
-		c.tasks[i+len(files)] = task
-	}
-	// init map index
-	c.id2Task = make(map[int]*Task)
-	for _, task := range c.tasks {
-		c.id2Task[task.TaskId] = task
+		c.Tasks[i+len(files)] = task
 	}
 	// init nums
-	c.mapTaskNum = len(files)
+	c.MapTaskNum = len(files)
+	// fmt.Printf("coordinator: %s", Marshal(&c))
 	// start server
 	c.server()
 	return &c

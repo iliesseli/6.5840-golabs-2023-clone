@@ -3,14 +3,14 @@ package mr
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io/ioutil"
+	"log"
+	"net/rpc"
 	"os"
 	"sort"
 	"time"
 )
-import "log"
-import "net/rpc"
-import "hash/fnv"
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -48,6 +48,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			continue
 		}
 		task := taskResp.Task
+		// fmt.Printf("Worker[%d]: receive task:%+v\n", os.Getpid(), Marshal(task))
 		if task.TaskType == MapType {
 			HandleMapTask(task, mapf)
 		} else if task.TaskType == ReduceType {
@@ -93,10 +94,10 @@ func HandleMapTask(task *Task, mapf func(string, string) []KeyValue) {
 
 func HandleReduceTask(task *Task, reducef func(string, []string) string) {
 	WaitTillCanRun(task.TaskId)
+	// fmt.Printf("worker[%d]: can run\n", os.Getpid())
 	intermediate := make([]KeyValue, 0)
 	// reader file into intermediate
-	for i := 0; i < task.NReduce; i++ {
-		intermediateFilename := fmt.Sprintf("mr-%d-%d", task.TaskId, i)
+	for _, intermediateFilename := range task.FileNames {
 		file, _ := os.Open(intermediateFilename)
 		dec := json.NewDecoder(file)
 		for {
@@ -109,7 +110,8 @@ func HandleReduceTask(task *Task, reducef func(string, []string) string) {
 	}
 
 	sort.Sort(ByKey(intermediate))
-	oname := fmt.Sprintf("mr-out-%d", task.TaskId)
+	// fmt.Printf("intermediate's len:[%d]\n", len(intermediate))
+	oname := fmt.Sprintf("mr-out-%d", task.TaskId-task.MapTaskNum)
 	ofile, _ := os.Create(oname)
 
 	//
@@ -139,7 +141,7 @@ func HandleReduceTask(task *Task, reducef func(string, []string) string) {
 }
 
 func WaitTillCanRun(taskId int) {
-	for true {
+	for {
 		if CallCanRun(taskId) {
 			return
 		}
@@ -198,13 +200,11 @@ func CallUpdateTaskStatus(taskId int, status int) {
 	req.WorkerId = os.Getpid()
 	req.TaskId = taskId
 	req.TaskStatus = status
-	resp := AskTaskResp{}
+	resp := UpdateTaskStatusResp{}
 
-	ok := call("Coordinator.AskTask", &req, &resp)
-	if ok {
+	ok := call("Coordinator.UpdateTaskStatus", &req, &resp)
+	if !ok {
 		fmt.Printf("[%s]: call failed!\n", "UpdateTaskStatus")
-	} else {
-		fmt.Printf("call failed!\n")
 	}
 }
 
@@ -242,4 +242,13 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	fmt.Println(err)
 	return false
+}
+
+func Marshal(v interface{}) string {
+	res, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	} else {
+		return string(res)
+	}
 }

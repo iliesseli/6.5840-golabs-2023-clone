@@ -8,9 +8,9 @@ package mr
 
 import (
 	"os"
+	"strconv"
 	"time"
 )
-import "strconv"
 
 //
 // example to show how to declare the arguments
@@ -41,6 +41,7 @@ type Task struct {
 	FileName   string   // for map type
 	FileNames  []string // for reduce type
 	NReduce    int
+	MapTaskNum int
 	TaskType   int
 	TaskStatus int
 
