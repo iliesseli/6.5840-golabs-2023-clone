@@ -6,7 +6,10 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
+import (
+	"os"
+	"time"
+)
 import "strconv"
 
 //
@@ -14,16 +17,68 @@ import "strconv"
 // and reply for an RPC.
 //
 
-type ExampleArgs struct {
-	X int
+const (
+	MapType    = 0
+	ReduceType = 1
+)
+
+const (
+	WorkerOffline    = 0
+	WorkerIdle       = 1
+	WorkerInProgress = 2
+	WorkerCompleted  = 3
+)
+
+const (
+	TaskCreated    = 0
+	TaskIsAssigned = 1
+	TaskIsComplete = 2
+)
+
+type Task struct {
+	TaskId     int
+	WorkId     int
+	FileName   string   // for map type
+	FileNames  []string // for reduce type
+	NReduce    int
+	TaskType   int
+	TaskStatus int
+
+	timer *time.Timer
 }
 
-type ExampleReply struct {
-	Y int
+type AskTaskReq struct {
+	WorkerId int
 }
 
-// Add your RPC definitions here.
+type AskTaskResp struct {
+	Task *Task
+}
 
+type DoneReq struct {
+}
+
+type DoneResp struct {
+	Done bool
+}
+
+type UpdateTaskStatusReq struct {
+	WorkerId   int
+	TaskId     int
+	TaskStatus int
+}
+
+type UpdateTaskStatusResp struct {
+}
+
+type CanRunReq struct {
+	WorkerId int
+	TaskId   int
+}
+
+type CanRunResp struct {
+	CanRun bool
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
