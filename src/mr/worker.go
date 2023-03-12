@@ -33,12 +33,6 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-type worker struct {
-	workId   int64
-	taskType int8
-	state    int8
-}
-
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
@@ -93,7 +87,7 @@ func HandleMapTask(task *Task, mapf func(string, string) []KeyValue) {
 }
 
 func HandleReduceTask(task *Task, reducef func(string, []string) string) {
-	WaitTillCanRun(task.TaskId)
+	// WaitTillCanRun(task.TaskId)
 	// fmt.Printf("worker[%d]: can run\n", os.Getpid())
 	intermediate := make([]KeyValue, 0)
 	// reader file into intermediate
@@ -145,7 +139,7 @@ func WaitTillCanRun(taskId int) {
 		if CallCanRun(taskId) {
 			return
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 
@@ -155,7 +149,7 @@ func WaitTillCanRun(taskId int) {
 
 func Done() bool {
 	// prevent frequency request to the coordinator
-	time.Sleep(2 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 	// declare an argument structure.
 	req := DoneReq{}
 	// declare a reply structure.

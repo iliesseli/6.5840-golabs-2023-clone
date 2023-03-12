@@ -27,22 +27,27 @@ func (c *Coordinator) AskTask(req *AskTaskReq, resp *AskTaskResp) error {
 	c.RwMutex.Lock()
 	defer c.RwMutex.Unlock()
 	for _, task := range c.Tasks {
+		task := task
 		if task.TaskStatus == TaskCreated {
+			if task.TaskType == ReduceType && c.CompletedMapTaskCount != c.MapTaskNum {
+				continue
+			}
 			task.WorkId = req.WorkerId
 			task.TaskStatus = TaskIsAssigned
 			resp.Task = task
 			if task.timer != nil {
-				task.timer.Reset(10 * time.Second)
-			} else {
-				task.timer = time.AfterFunc(10*time.Second, func() {
-					c.RwMutex.Lock()
-					defer c.RwMutex.Unlock()
-					if task.TaskStatus != TaskIsComplete {
-						task.TaskStatus = TaskCreated
-						task.WorkId = 0
-					}
-				})
+				task.timer.Stop()
+				task.timer = nil
 			}
+			task.timer = time.AfterFunc(10*time.Second, func() {
+				// fmt.Printf("timer is activated! task:[%s]\n", Marshal(task))
+				c.RwMutex.Lock()
+				defer c.RwMutex.Unlock()
+				if task.TaskStatus != TaskIsComplete {
+					task.TaskStatus = TaskCreated
+					task.WorkId = 0
+				}
+			})
 			return nil
 		}
 	}
@@ -141,7 +146,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 	// init nums
 	c.MapTaskNum = len(files)
-	// fmt.Printf("coordinator: %s", Marshal(&c))
 	// start server
 	c.server()
 	return &c
