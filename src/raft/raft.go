@@ -172,16 +172,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	reply.Term = rf.CurrentTerm
 	if args.Term > rf.CurrentTerm {
 		rf.CurrentTerm = args.Term
 		rf.ServerRole = ServerFollower
 		rf.VotedFor = nil
 	}
-	if args.Term >= rf.CurrentTerm && rf.VotedFor == nil {
+	if args.Term == rf.CurrentTerm && rf.VotedFor == nil {
 		reply.VoteGranted = true
 		rf.VotedFor = &args.CandidateId
+		rf.LastHeartBeatTime = time.Now()
 	}
+	reply.Term = rf.CurrentTerm
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -233,7 +234,6 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	reply.Term = rf.CurrentTerm
 	if args.Term > rf.CurrentTerm {
 		rf.CurrentTerm = args.Term
 		rf.ServerRole = ServerFollower
@@ -241,11 +241,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	// heartbeat
 	if len(args.Entries) == 0 {
-		if args.Term >= rf.CurrentTerm {
+		if args.Term == rf.CurrentTerm {
 			rf.LastHeartBeatTime = time.Now()
 			reply.Success = true
 		}
 	}
+	reply.Term = rf.CurrentTerm
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -301,20 +302,13 @@ func (rf *Raft) ticker() {
 		// Check if a leader election should be started.
 		wg := sync.WaitGroup{}
 		rf.mu.Lock()
-		lastHeartBeatTime := rf.LastHeartBeatTime
-		electionTimeout := rf.ElectionTimeout
-		serverRole := rf.ServerRole
-		rf.mu.Unlock()
-		if serverRole != ServerLeader && time.Since(lastHeartBeatTime) > electionTimeout {
+		if rf.ServerRole != ServerLeader && time.Since(rf.LastHeartBeatTime) > rf.ElectionTimeout {
 			DPrintf("ServerId[%d] election timeout", rf.ServerId)
-			rf.mu.Lock()
 			rf.ServerRole = ServerCandidate
 			rf.CurrentTerm += 1
 			// vote self
 			rf.VoteCount = 1
 			rf.VotedFor = &rf.ServerId
-			rf.LastHeartBeatTime = time.Now()
-			rf.mu.Unlock()
 			for i := 0; i < len(rf.peers); i++ {
 				// send voteeq except me
 				if i != rf.me {
@@ -323,6 +317,7 @@ func (rf *Raft) ticker() {
 						defer wg.Done()
 						rf.mu.Lock()
 						if rf.ServerRole != ServerCandidate {
+							rf.mu.Unlock()
 							return
 						}
 						args := RequestVoteArgs{
@@ -337,6 +332,10 @@ func (rf *Raft) ticker() {
 							DPrintf("ServerId[%d] sendRequestVote successfully", rf.ServerId)
 							if reply.VoteGranted {
 								rf.VoteCount++
+								if rf.VoteCount > len(rf.peers)/2 {
+									DPrintf("ServerId[%d] become leader", rf.ServerId)
+									rf.ServerRole = ServerLeader
+								}
 							}
 							if reply.Term > rf.CurrentTerm {
 								rf.CurrentTerm = reply.Term
@@ -350,20 +349,21 @@ func (rf *Raft) ticker() {
 					}(i)
 				}
 			}
-			DPrintf("ServerId[%d] wait parallel vote", rf.ServerId)
-			wg.Wait()
-			if rf.VoteCount > len(rf.peers)/2 {
-				DPrintf("ServerId[%d] become leader", rf.ServerId)
-				rf.ServerRole = ServerLeader
-			} else {
-				DPrintf("ServerId[%d] not enough votes ", rf.ServerId)
-			}
 		}
+		rf.mu.Unlock()
 
+		ms := 50 + (rand.Int63() % 300)
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+	}
+}
+
+func (rf *Raft) leaderHeartbeats() {
+	for rf.killed() == false {
+		rf.mu.Lock()
 		if rf.ServerRole == ServerLeader {
 			DPrintf("ServerId[%d] parallel send heartbeat", rf.ServerId)
 			for i := 0; i < len(rf.peers); i++ {
-				if i != rf.me {
+				if i != rf.me && rf.ServerRole == ServerLeader {
 					go func(idx int) {
 						rf.mu.Lock()
 						args := AppendEntriesArgs{
@@ -387,8 +387,8 @@ func (rf *Raft) ticker() {
 				}
 			}
 		}
-
-		ms := 150
+		rf.mu.Unlock()
+		ms := 100
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
@@ -424,6 +424,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+	go rf.leaderHeartbeats()
 
 	return rf
 }
